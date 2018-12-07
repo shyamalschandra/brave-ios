@@ -229,7 +229,7 @@ class SettingsViewController: TableViewController {
     }()
     
     private lazy var shieldsSection: Section = {
-        return Section(
+        var shields = Section(
             header: .title(Strings.Brave_Shield_Defaults),
             rows: [
                 BoolRow(title: Strings.Block_Ads_and_Tracking, option: Preferences.Shields.blockAdsAndTracking),
@@ -239,8 +239,12 @@ class SettingsViewController: TableViewController {
                 BoolRow(title: Strings.Fingerprinting_Protection, option: Preferences.Shields.fingerprintingProtection),
             ]
         )
-        // TODO: Add regional adblock
-        // shields.rows.append(BasicBoolRow(title: Strings.Use_regional_adblock, option: Preferences.Shields.useRegionAdBlock))
+        // TODO: Determine which regions are supported
+        let region = Locale.current.regionCode
+        if ["FR", "GR", "RU"].contains(region) {
+            shields.rows.append(BoolRow(title: Strings.Use_regional_adblock, option: Preferences.Shields.useRegionAdBlock))
+        }
+        return shields
     }()
     
     private lazy var supportSection: Section = {
