@@ -58,6 +58,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UIViewControllerRestorati
         self.window!.backgroundColor = UIColor.Photon.White100
 
         AdBlockStats.shared.startLoading()
+        HttpsEverywhereStats.shared.startLoading()
         
         // Passcode checking, must happen on immediate launch
         if !DataController.shared.storeExists() {
@@ -81,7 +82,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UIViewControllerRestorati
 
     @discardableResult fileprivate func startApplication(_ application: UIApplication, withLaunchOptions launchOptions: [AnyHashable: Any]?) -> Bool {
         log.info("startApplication begin")
-        
         
         // Set the Firefox UA for browsing.
         setUserAgent()
@@ -225,7 +225,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UIViewControllerRestorati
             profile?.searchEngines.setupDefaultRegionalSearchEngines()
         }
         
-        if let urp = UserReferralProgram() {
+        if let urp = UserReferralProgram.shared {
             if isFirstLaunch {
                 urp.referralLookup { url in
                     guard let url = url else { return }

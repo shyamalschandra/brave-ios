@@ -167,9 +167,8 @@ class BookmarksViewController: SiteTableViewController {
       make.bottom.equalTo(self.view.safeAreaLayoutGuide)
     }
     
-    tableView.snp.makeConstraints { make in
-      make.bottom.equalTo(self.view).inset(UIEdgeInsets(top: 0, left: 0, bottom: toolbarHeight, right: 0))
-    }
+    tableView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: toolbarHeight, right: 0)
+    tableView.scrollIndicatorInsets = tableView.contentInset
     
     reloadData()
   }
@@ -648,7 +647,7 @@ extension BookmarksViewController {
     
     var items: [UIAlertAction] = []
     // New Tab
-    items.append(UIAlertAction(title: Strings.Open_In_Background_Tab, style: .default, handler: { [weak self] _ in
+    items.append(UIAlertAction(title: Strings.OpenNewTabButtonTitle, style: .default, handler: { [weak self] _ in
       guard let `self` = self else { return }
       self.linkNavigationDelegate?.linkNavigatorDidRequestToOpenInNewTab(url, isPrivate: currentTabIsPrivate)
     }))

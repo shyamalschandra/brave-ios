@@ -358,6 +358,7 @@ class URLBarView: UIView {
         locationTextField.keyboardType = .webSearch
         locationTextField.autocorrectionType = .no
         locationTextField.autocapitalizationType = .none
+        locationTextField.smartDashesType = .no
         locationTextField.returnKeyType = .go
         locationTextField.clearButtonMode = .whileEditing
         locationTextField.textAlignment = .left
@@ -400,6 +401,12 @@ class URLBarView: UIView {
         locationContainer.alpha = alpha
         self.alpha = alpha
     }
+    
+    func currentProgress() -> Float {
+        return progressBar.progress
+    }
+    
+    static let psuedoProgressValue: Float = 0.1
     
     func updateProgressBar(_ progress: Float) {
         progressBar.alpha = 1

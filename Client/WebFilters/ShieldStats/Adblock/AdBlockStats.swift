@@ -28,6 +28,8 @@ class AdBlockStats {
     let adBlockRegionFilePath = Bundle.main.path(forResource: "adblock-regions", ofType: "txt")
     let adBlockDataUrlPath = "https://adblock-data.s3.brave.com/"
     
+    private let blockListFileName = "ABPFilterParserData"
+    
     /// If set to true, it uses local dat file instead of downloading it from the server.
     let useLocalDatFile = true
     
@@ -49,10 +51,11 @@ class AdBlockStats {
     fileprivate init() {
         setDataVersionPreference()
         updateEnabledState()
-        networkLoaders[AdBlockStats.defaultLocale] = getNetworkLoader(forLocale: AdBlockStats.defaultLocale, name: "ABPFilterParserData")
+        networkLoaders[AdBlockStats.defaultLocale] = getNetworkLoader(forLocale: AdBlockStats.defaultLocale, name: blockListFileName)
         parseAdblockRegionsFile()
         
         // so that didSet is called from init
+        // swiftlint:disable:next inert_defer
         defer { currentLocaleCode = Locale.current.languageCode ?? AdBlockStats.defaultLocale }
     }
     
@@ -122,7 +125,7 @@ class AdBlockStats {
         // Temporarily a prepackaged blocklist data file is used.
         if useLocalDatFile {
             // First network loader is always the default one("en")
-            networkLoaders.first?.1.loadLocalData()
+            networkLoaders.first?.1.loadLocalData(blockListFileName, type: "dat")
             return
         }
         

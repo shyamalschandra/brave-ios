@@ -73,6 +73,15 @@ extension BrowserViewController: WKNavigationDelegate {
             decisionHandler(.cancel)
             return
         }
+        
+        if let customHeader = UserReferralProgram.shouldAddCustomHeader(for: navigationAction.request) {
+            decisionHandler(.cancel)
+            var newRequest = navigationAction.request
+            UrpLog.log("Adding custom header: [\(customHeader.field): \(customHeader.value)] for domain: \(newRequest.url?.absoluteString ?? "404")")
+            newRequest.addValue(customHeader.value, forHTTPHeaderField: customHeader.field)
+            webView.load(newRequest)
+            return
+        }
 
         if url.scheme == "about" {
             decisionHandler(.allow)
@@ -138,6 +147,24 @@ extension BrowserViewController: WKNavigationDelegate {
             }
 
             pendingRequests[url.absoluteString] = navigationAction.request
+            
+            if let urlHost = url.normalizedHost {
+                // If an upgraded https load happens with a host which was upgraded, increase the stats
+                if url.scheme == "https", let _ = pendingHTTPUpgrades.removeValue(forKey: urlHost) {
+                    BraveGlobalShieldStats.shared.httpse += 1
+                    if let stats = self.tabManager[webView]?.contentBlocker.stats {
+                        self.tabManager[webView]?.contentBlocker.stats = stats.create(byAddingListItem: .https)
+                    }
+                }
+                
+                if let mainDocumentURL = navigationAction.request.mainDocumentURL, url.scheme == "http" {
+                    let domainForShields = Domain.getOrCreateForUrl(mainDocumentURL, context: DataController.viewContext)
+                    if domainForShields.isShieldExpected(.HTTPSE) && HttpsEverywhereStats.shared.shouldUpgrade(url) {
+                        // Check if HTTPSE is on and if it is, whether or not this http url would be upgraded
+                        pendingHTTPUpgrades[urlHost] = navigationAction.request
+                    }
+                }
+            }
 
             // Adblock logic,
             // Only use main document URL, not the request URL
@@ -280,6 +307,9 @@ extension BrowserViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let tab = tabManager[webView] {
             navigateInTab(tab: tab, to: navigation)
+            if tab === tabManager.selectedTab {
+                urlBar.updateProgressBar(1.0)
+            }
             tabsBar.reloadDataAndRestoreSelectedTab()
         }
     }

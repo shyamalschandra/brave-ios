@@ -112,6 +112,9 @@ class BrowserViewController: UIViewController {
     var navigationToolbar: TabToolbarProtocol {
         return toolbar ?? urlBar
     }
+    
+    /// Keep track of the URL request that was upgraded so that we can add it to the HTTPS page stats
+    var pendingHTTPUpgrades = [String: URLRequest]()
 
     // Keep track of allowed `URLRequest`s from `webView(_:decidePolicyFor:decisionHandler:)` so
     // that we can obtain the originating `URLRequest` when a `URLResponse` is received. This will
@@ -124,7 +127,7 @@ class BrowserViewController: UIViewController {
 
     let downloadQueue = DownloadQueue()
     
-    fileprivate var contentBlockListDeferred: Deferred<((), ())>?
+    fileprivate var contentBlockListDeferred: Deferred<()>?
     
     // Web filters
     
@@ -412,7 +415,24 @@ class BrowserViewController: UIViewController {
     /// Added to keyWindow, since it can then be utilized from any VC (e.g. settings modal).
     /// This also inits sync at app launch.
     private func initializeSyncWebView() {
-        Sync.shared.webView.alpha = 0.01
+        let sync = Sync.shared
+        
+        #if NO_SYNC
+        if sync.syncSeedArray == nil { return }
+        
+        sync.leaveSyncGroup()
+        
+        let msg = """
+            Sync has been disabled, as it will not be included in the next couple of production builds.
+            Your iOS device has been auto-removed from any sync groups.
+        """
+        
+        let alert = UIAlertController(title: "Sync Disabled", message: msg, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Ok", style: .default, handler: nil))
+        present(alert, animated: true, completion: nil)
+        #endif
+        
+        sync.webView.alpha = 0.01
         UIApplication.shared.keyWindow?.insertSubview(Sync.shared.webView, at: 0)
     }
     
@@ -887,6 +907,13 @@ class BrowserViewController: UIViewController {
             
             if webView == tabManager.selectedTab?.webView {
                 urlBar.locationView.loading = loading
+                if !(webView.url?.isLocalUtility ?? false) {
+                    if loading && urlBar.currentProgress() < URLBarView.psuedoProgressValue {
+                        urlBar.updateProgressBar(URLBarView.psuedoProgressValue)
+                    }
+                } else {
+                    urlBar.hideProgressBar()
+                }
             }
             
             if !loading {
@@ -910,7 +937,7 @@ class BrowserViewController: UIViewController {
             
             // Ensure that the tab title *actually* changed to prevent repeated calls
             // to navigateInTab(tab:).
-            guard let title = tab.title else { break }
+            guard let title = (webView.title?.count == 0 ? webView.url?.absoluteString : webView.title) else { break }
             if !title.isEmpty && title != tab.lastTitle {
                 navigateInTab(tab: tab)
             }
@@ -933,14 +960,14 @@ class BrowserViewController: UIViewController {
                 tab.contentIsSecure = false
             }
             
-            updateURLBar()
+            urlBar.contentIsSecure = tab.contentIsSecure
         case .serverTrust:
             guard let tab = tabManager[webView] else {
                 break
             }
 
             tab.contentIsSecure = false
-            updateURLBar()
+            urlBar.contentIsSecure = tab.contentIsSecure
 
             guard let serverTrust = tab.webView?.serverTrust else {
                 break
@@ -1668,19 +1695,31 @@ extension BrowserViewController: TabToolbarDelegate {
     }
 
     func tabToolbarDidLongPressAddTab(_ tabToolbar: TabToolbarProtocol, button: UIButton) {
-        let alertController = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-        alertController.addAction(UIAlertAction(title: Strings.CancelButtonTitle, style: .cancel, handler: nil))
+        showAddTabContextMenu(sourceView: toolbar ?? urlBar, button: button)
+    }
+    
+    private func addTabAlertActions() -> [UIAlertAction] {
+        var actions: [UIAlertAction] = []
         if !PrivateBrowsingManager.shared.isPrivateBrowsing {
             let newPrivateTabAction = UIAlertAction(title: Strings.NewPrivateTabTitle, style: .default, handler: { [unowned self] _ in
                 // BRAVE TODO: Add check for DuckDuckGo popup (and based on 1.6, whether the browser lock is enabled?)
                 // before focusing on the url bar
                 self.openBlankNewTab(focusLocationField: true, isPrivate: true)
             })
-            alertController.addAction(newPrivateTabAction)
+            actions.append(newPrivateTabAction)
         }
-        alertController.addAction(UIAlertAction(title: Strings.NewTabTitle, style: .default, handler: { [unowned self] _ in
+        actions.append(UIAlertAction(title: Strings.NewTabTitle, style: .default, handler: { [unowned self] _ in
             self.openBlankNewTab(focusLocationField: true, isPrivate: PrivateBrowsingManager.shared.isPrivateBrowsing)
         }))
+        return actions
+    }
+    
+    func showAddTabContextMenu(sourceView: UIView, button: UIButton) {
+        let alertController = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        alertController.addAction(UIAlertAction(title: Strings.CancelButtonTitle, style: .cancel, handler: nil))
+        addTabAlertActions().forEach(alertController.addAction)
+        alertController.popoverPresentationController?.sourceView = sourceView
+        alertController.popoverPresentationController?.sourceRect = button.frame
         let generator = UIImpactFeedbackGenerator(style: .heavy)
         generator.impactOccurred()
         present(alertController, animated: true)
@@ -1701,6 +1740,12 @@ extension BrowserViewController: TabToolbarDelegate {
             return
         }
         let controller = AlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        
+        if (UIDevice.current.userInterfaceIdiom == .pad && tabsBar.view.isHidden) ||
+            (UIDevice.current.userInterfaceIdiom == .phone && toolbar == nil) {
+            addTabAlertActions().forEach(controller.addAction)
+        }
+        
         if tabManager.tabsForCurrentMode.count > 1 {
             controller.addAction(UIAlertAction(title: String(format: Strings.CloseAllTabsTitle, tabManager.tabsForCurrentMode.count), style: .destructive, handler: { _ in
                 self.tabManager.removeAll()
@@ -1745,6 +1790,10 @@ extension BrowserViewController: TabsBarViewControllerDelegate {
         if tab == tabManager.selectedTab { return }
         urlBar.leaveOverlayMode(didCancel: true)
         tabManager.selectTab(tab)
+    }
+    
+    func tabsBarDidLongPressAddTab(_ tabsBarController: TabsBarViewController, button: UIButton) {
+        showAddTabContextMenu(sourceView: tabsBarController.view, button: button)
     }
 }
 
@@ -1901,6 +1950,16 @@ extension BrowserViewController: TabManagerDelegate {
 
         if let tab = selected, let webView = tab.webView {
             updateURLBar()
+            
+            if let url = tab.url, !url.isLocalUtility, webView.isLoading {
+                if webView.estimatedProgress > 0 {
+                    urlBar.updateProgressBar(Float(webView.estimatedProgress))
+                } else {
+                    urlBar.updateProgressBar(URLBarView.psuedoProgressValue)
+                }
+            } else {
+                urlBar.hideProgressBar()
+            }
 
             if tab.type != previous?.type {
                 let theme = Theme.of(tab)
@@ -1930,7 +1989,7 @@ extension BrowserViewController: TabManagerDelegate {
             updateTabCountUsingTabManager(tabManager)
         }
         
-        if PrivateBrowsingManager.shared.isPrivateBrowsing {
+        if PrivateBrowsingManager.shared.isPrivateBrowsing && presentedViewController == nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 self.presentDuckDuckGoCallout()
             }
@@ -2379,8 +2438,10 @@ extension BrowserViewController: ContextMenuHelperDelegate {
             let tabType = currentTab.type
 
             let addTab = { (rURL: URL, isPrivate: Bool) in
-                    let tab = self.tabManager.addTab(URLRequest(url: rURL as URL), afterTab: currentTab, isPrivate: isPrivate)
-
+                let tab = self.tabManager.addTab(URLRequest(url: rURL as URL), afterTab: currentTab, isPrivate: isPrivate)
+                if isPrivate && !PrivateBrowsingManager.shared.isPrivateBrowsing {
+                    self.tabManager.selectTab(tab)
+                } else {
                     // We're not showing the top tabs; show a toast to quick switch to the fresh new tab.
                     let toast = ButtonToast(labelText: Strings.ContextMenuButtonToastNewTabOpenedLabelText, buttonText: Strings.ContextMenuButtonToastNewTabOpenedButtonText, completion: { buttonPressed in
                         if buttonPressed {
@@ -2388,6 +2449,8 @@ extension BrowserViewController: ContextMenuHelperDelegate {
                         }
                     })
                     self.show(toast: toast)
+                }
+                self.scrollController.showToolbars(animated: true)
             }
 
             if !tabType.isPrivate {
@@ -2420,14 +2483,17 @@ extension BrowserViewController: ContextMenuHelperDelegate {
             
             let openInNewTabAction = UIAlertAction(title: Strings.OpenImageInNewTabActionTitle, style: .default) { _ in
                 self.tabManager.addTab(URLRequest(url: url), afterTab: self.tabManager.selectedTab)
+                self.scrollController.showToolbars(animated: true)
             }
             actionSheetController.addAction(openInNewTabAction, accessibilityIdentifier: "linkContextMenu.openImageInNewTab")
 
             let photoAuthorizeStatus = PHPhotoLibrary.authorizationStatus()
             let saveImageAction = UIAlertAction(title: Strings.SaveImageActionTitle, style: .default) { _ in
                 if photoAuthorizeStatus == .authorized || photoAuthorizeStatus == .notDetermined {
-                    self.getImage(url as URL) {
-                        UIImageWriteToSavedPhotosAlbum($0, self, nil, nil)
+                    self.getData(url) { data in
+                        PHPhotoLibrary.shared().performChanges({
+                            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
+                        }, completionHandler: nil)
                     }
                 } else {
                     let accessDenied = UIAlertController(title: Strings.AccessPhotoDeniedAlertTitle, message: Strings.AccessPhotoDeniedAlertMessage, preferredStyle: .alert)
@@ -2486,10 +2552,10 @@ extension BrowserViewController: ContextMenuHelperDelegate {
         self.present(actionSheetController, animated: true, completion: nil)
     }
 
-    fileprivate func getImage(_ url: URL, success: @escaping (UIImage) -> Void) {
+    private func getData(_ url: URL, success: @escaping (Data) -> Void) {
         Alamofire.request(url).validate(statusCode: 200..<300).response { response in
-            if let data = response.data, let image = data.isGIF ? UIImage.imageFromGIFDataThreadSafe(data) : UIImage.imageFromDataThreadSafe(data) {
-                success(image)
+            if let data = response.data {
+                success(data)
             }
         }
     }
@@ -2780,18 +2846,22 @@ extension BrowserViewController: HomeMenuControllerDelegate {
             menu.dismiss(animated: true)
             
             let tab = self.tabManager.addTab(PrivilegedRequest(url: url) as URLRequest, afterTab: self.tabManager.selectedTab, isPrivate: isPrivate)
-            // If we are showing toptabs a user can just use the top tab bar
-            // If in overlay mode switching doesnt correctly dismiss the homepanels
-            guard !self.urlBar.inOverlayMode else {
-                return
-            }
-            // We're not showing the top tabs; show a toast to quick switch to the fresh new tab.
-            let toast = ButtonToast(labelText: Strings.ContextMenuButtonToastNewTabOpenedLabelText, buttonText: Strings.ContextMenuButtonToastNewTabOpenedButtonText, completion: { buttonPressed in
-                if buttonPressed {
-                    self.tabManager.selectTab(tab)
+            if isPrivate && !PrivateBrowsingManager.shared.isPrivateBrowsing {
+                self.tabManager.selectTab(tab)
+            } else {
+                // If we are showing toptabs a user can just use the top tab bar
+                // If in overlay mode switching doesnt correctly dismiss the homepanels
+                guard !self.urlBar.inOverlayMode else {
+                    return
                 }
-            })
-            self.show(toast: toast)
+                // We're not showing the top tabs; show a toast to quick switch to the fresh new tab.
+                let toast = ButtonToast(labelText: Strings.ContextMenuButtonToastNewTabOpenedLabelText, buttonText: Strings.ContextMenuButtonToastNewTabOpenedButtonText, completion: { buttonPressed in
+                    if buttonPressed {
+                        self.tabManager.selectTab(tab)
+                    }
+                })
+                self.show(toast: toast)
+            }
             
         case .copy:
             UIPasteboard.general.url = url
